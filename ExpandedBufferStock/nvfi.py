@@ -1,5 +1,6 @@
 import numpy as np
 
+from numba import njit, prange
 from consav import linear_interp
 from consav import golden_section_search
 
@@ -9,18 +10,22 @@ import utility
 # Keeper #
 ##########
 
-def obj_keep(c,nb,grid_n,grid_w):
+@njit
+def obj_keep(c,nb,grid_n,grid_w,rho):
     ''' Value of choice for keeper '''
 
-    # A. End-of-period net assets
+    # End-of-period net assets
     n = nb - c
 
-    # B. Continuation value
+    # Continuation value
     w = linear_interp.interp_1d(grid_n,grid_w,n)
 
-    # C. Value of choice
-    v = utility.func(c) + w
+    # Value of choice
+    v = utility.func(c,rho) + w
 
+    return -v
+
+@njit(parallel=True)
 def solve_keeper(t,sol,par):
     ''' Solve Bellman for keeper '''
 
@@ -29,7 +34,7 @@ def solve_keeper(t,sol,par):
     w = sol.w[t]
 
     # Loop over states
-    for i_nb in range(par.N_nb):
+    for i_nb in prange(par.N_nb):
         for i_db in range(par.N_db):
 
                 nb = par.grid_nb[i_nb]
@@ -41,8 +46,8 @@ def solve_keeper(t,sol,par):
                 c[i_nb,i_db] = golden_section_search.optimizer(obj_keep,
                                                                c_low,
                                                                c_high,
-                                                               args=(nb,par.grid_n,w[:,i_db]),
+                                                               args=(nb,par.grid_n,w[:,i_db],par.rho),
                                                                tol=par.tol)
 
                 # ii. Optimal value    
-                v[i_nb,i_db] = obj_keep(c[i_nb,i_db],nb,par.grid_n,w[:,i_db])
+                v[i_nb,i_db] = -obj_keep(c[i_nb,i_db],nb,par.grid_n,w[:,i_db],par.rho)

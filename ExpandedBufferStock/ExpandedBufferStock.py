@@ -1,7 +1,7 @@
-from types import SimpleNamespace
 import numpy as np
 import time
 
+from consav import ModelClass, jit
 from consav.grids import nonlinspace
 from consav.quadrature import create_PT_shocks
 
@@ -9,12 +9,10 @@ import nvfi
 import last_period
 import post_decision
 
-class ExpandedBufferStockClass():
+class ExpandedBufferStockClass(ModelClass):
 
-    def __init__(self):
-
-        self.sol = SimpleNamespace()
-        self.par = SimpleNamespace()
+    def settings(self):
+        pass
 
     def setup(self):
         ''' Define model parameters '''
@@ -31,15 +29,15 @@ class ExpandedBufferStockClass():
         # Returns and income
         par.r_a = -0.015
         par.Gamma = 1.02
-        par.sigma_psi = 0.1
-        par.sigma_xi = 0.1
+        par.sigma_psi = 1e-8
+        par.sigma_xi = 1e-8
         par.Npsi = 5
         par.Nxi = 5
         par.mu = 0.3
         par.u = 0.07
 
         # Debt
-        par.phi = 0.75
+        par.phi = 2*1e-8
         par.eta = 0.0
         par.r_d = 0.120
         par.lambdaa = 0.03
@@ -52,8 +50,8 @@ class ExpandedBufferStockClass():
         
         # Grid span
         par.nb_max = 5.0
-        par.nb_min = -par.phi * par.nb_max
-        par.db_max =  par.phi * par.nb_max
+        par.nb_min = -par.phi
+        par.db_max =  par.phi
         par.db_min = 1e-8
 
     def allocate(self):
@@ -85,47 +83,54 @@ class ExpandedBufferStockClass():
         sol.w = np.zeros(post_shape)
 
         # E. Speed
+        par.time_total = np.nan
         par.time_w = np.zeros(par.T)
-        par.time_total = np.zeros(par.T)
-        par.time_keep = np.zeros(par.T)
         par.time_adj = np.zeros(par.T)
+        par.time_keep = np.zeros(par.T)
 
     def solve(self,do_print=True):
         ''' Solve the model '''
 
-        par = self.par
-        sol = self.sol
-
         tic = time.time()
 
         # Backwards induction
-        last_period.solve(sol,par)
+        for t in reversed(range(self.par.T)):
 
-        for t in reversed(range(par.T-1)):
+            if do_print == True: print(f'Period {t+1}:')
 
-            if do_print == True: print(f'Period {t}:')
+            with jit(self) as model:
 
-            # A. Post-decision value function
-            tic_ = time.time()
-            post_decision.compute_w(t,sol,par)
-            toc_ = time.time()
+                par = model.par
+                sol = model.sol
 
-            par.time_w[t] = toc_-tic_
-            if do_print == True: print(f'Post-decision computed in {toc_-tic_:.1f} secs')
+                if t == par.T-1: 
+                    
+                    # Last period
+                    tic_ = time.time()
+                    last_period.solve(sol,par)
+                    toc_ = time.time()
 
-            # B. Keeper's problem
-            tic_ = time.time()
-            nvfi.solve_keeper(t,sol,par)
-            toc_ = time.time()
+                    par.time_keep[t] = toc_-tic_
+                    if do_print == True: print(f"Keeper's problem solved in {toc_-tic_:.1f} secs \n")
 
-            par.time_keep[t] = toc_-tic_
-            if do_print == True: print(f"Keeper's problem solved in {toc_-tic_:.1f} secs \n")
+                else:
+
+                    # A. Post-decision value function
+                    tic_ = time.time()
+                    post_decision.compute_w(t,sol,par)
+                    toc_ = time.time()
+
+                    par.time_w[t] = toc_-tic_
+                    if do_print == True: print(f'Post-decision computed in {toc_-tic_:.1f} secs')
+
+                    # B. Keeper's problem
+                    tic_ = time.time()
+                    nvfi.solve_keeper(t,sol,par)
+                    toc_ = time.time()
+
+                    par.time_keep[t] = toc_-tic_
+                    if do_print == True: print(f"Keeper's problem solved in {toc_-tic_:.1f} secs \n")
 
         toc = time.time()
-        par.time_total = toc - tic
+        self.par.time_total = toc - tic
         if do_print == True: print(f'Model solved with NVFI in {toc-tic:.1f} secs')
-
-
-
-
-
