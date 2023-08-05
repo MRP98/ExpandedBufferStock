@@ -7,10 +7,12 @@ from consav.quadrature import create_PT_shocks
 
 import vfi
 import nvfi
+import figs
+import simulate
 import last_period
 import post_decision
 
-class BufferStockModel(ModelClass):
+class BufferStockClass(ModelClass):
 
     def settings(self):
         pass
@@ -22,7 +24,7 @@ class BufferStockModel(ModelClass):
 
         par.T = 5
         par.tol = 1e-8
-        par.solmethod = 'nvfi'
+        par.solmethod = 'vfi'
 
         # Preferences
         par.beta = 0.96
@@ -50,16 +52,22 @@ class BufferStockModel(ModelClass):
         par.a_max = 20.0
         par.a_min = 1e-8
 
+        # Simulation
+        par.sim_seed = 1998
+        par.simT = par.T
+        par.simN = 1000
+
     def allocate(self):
         ''' Create grids and solution arrays '''
 
         par = self.par
         sol = self.sol
+        sim = self.sim
 
         # A. Grids
         par.grid_m = nonlinspace(par.m_min,par.m_max,par.N_m,1.1)
         par.grid_p = nonlinspace(par.p_min,par.p_max,par.N_p,1.1)
-        par.grid_a = nonlinspace(par.a_min,par.nb_max,par.N_a,1.1) # Post-decision grid (dense)
+        par.grid_a = nonlinspace(par.a_min,par.a_max,par.N_a,1.1) # Post-decision grid (dense)
 
         # B. Shocks
         shocks = create_PT_shocks(par.sigma_psi,par.N_psi,
@@ -74,9 +82,19 @@ class BufferStockModel(ModelClass):
         sol.v = np.nan*np.zeros((par.T,par.N_p,par.N_m))
 
         # E. Speed
-        par.time_total = np.nan
+        par.time_sim = np.nan
+        par.time_solve = np.nan
         par.time = np.zeros(par.T)
         par.time_w = np.zeros(par.T)
+
+        # F. Simulation
+        sim.p = np.nan*np.zeros((par.simT,par.simN))
+        sim.m = np.nan*np.zeros((par.simT,par.simN))
+        sim.a = np.nan*np.zeros((par.simT,par.simN))
+        sim.c = np.nan*np.zeros((par.simT,par.simN))
+
+        sim.psi = np.ones((par.simT,par.simN))
+        sim.xi = np.ones((par.simT,par.simN))
 
     def solve(self,do_print=True):
         ''' Solve the model '''
@@ -98,7 +116,7 @@ class BufferStockModel(ModelClass):
             # A. Last period
             if t == par.T-1: 
                 
-                last_period.solve(sol,par)
+                last_period.solve(t,sol,par)
 
             # B. Other periods
             else:
@@ -122,5 +140,48 @@ class BufferStockModel(ModelClass):
             if do_print == True: print(f"Solved in {toc_-tic_:.1f} secs \n")
 
         toc = time.time()
-        self.par.time_total = toc - tic
+        self.par.time_solve = toc - tic
         if do_print == True: print(f'Model solved with {par.solmethod} in {toc-tic:.1f} secs')
+
+    ############
+    # Simulate #
+    ############
+
+    def simulate(self,do_print=True):
+        """ Simulate model """
+
+        np.random.seed(self.par.sim_seed)
+
+        # Jitted functions
+        with jit(self) as model:
+
+            par = model.par
+            sol = model.sol
+            sim = model.sim
+
+            # Draw random numbers
+            I = np.random.choice(par.N_shocks,size=(par.T,par.simN),p=par.psi_w*par.xi_w)
+
+            sim.psi[:] = par.psi[I]
+            sim.xi[:] = par.xi[I]
+
+            # Simulate
+            tic = time.time()
+            simulate.lifecycle(sim,sol,par)
+            toc = time.time()
+
+        self.par.time_sim = tic - toc
+        if do_print == True: print(f'Model simulated in {self.par.time_sim:.1f} secs')    
+
+    ###########
+    # Figures #
+    ###########
+
+    def consumption_function(self,t=0):
+        figs.consumption_function(self,t)
+
+    def consumption_function_interact(self):
+        figs.consumption_function_interact(self)
+
+    def lifecycle(self):
+        figs.lifecycle(self)        
