@@ -1,10 +1,13 @@
 import time
 import numpy as np
 
+# Consav package
 from consav import ModelClass, jit
 from consav.grids import nonlinspace
 from consav.quadrature import create_PT_shocks
 
+# Local modules
+import egm
 import vfi
 import nvfi
 import figs
@@ -77,6 +80,7 @@ class BufferStockClass(ModelClass):
         par.psi,par.psi_w,par.xi,par.xi_w,par.N_shocks = shocks
 
         # C. Solution arrays
+        sol.q = np.nan*np.zeros((par.N_p,par.N_a))
         sol.w = np.nan*np.zeros((par.N_p,par.N_a))
         sol.c = np.nan*np.ones((par.T,par.N_p,par.N_m))        
         sol.v = np.nan*np.zeros((par.T,par.N_p,par.N_m))
@@ -85,7 +89,7 @@ class BufferStockClass(ModelClass):
         par.time_sim = np.nan
         par.time_solve = np.nan
         par.time = np.zeros(par.T)
-        par.time_w = np.zeros(par.T)
+        par.time_post = np.zeros(par.T)
 
         # F. Simulation
         sim.p = np.nan*np.zeros((par.simT,par.simN))
@@ -111,7 +115,6 @@ class BufferStockClass(ModelClass):
         for t in reversed(range(par.T)):
 
             tic_ = time.time()
-            if do_print == True: print(f'Period {t+1}:')
 
             # A. Last period
             if t == par.T-1: 
@@ -121,31 +124,35 @@ class BufferStockClass(ModelClass):
             # B. Other periods
             else:
 
-                # I. Post-decision value function (only for NVFI)
-                if par.solmethod == 'nvfi': 
+                compute_w = False
+                compute_q = False
+
+                if par.solmethod == 'nvfi': compute_w = True
+                elif par.solmethod == 'egm': compute_q = True
+
+                # I. Compute post-decision functions
+                if compute_w or compute_q:
                     
                     tic__ = time.time()
-                    post_decision.compute_w(t,sol,par)
+                    post_decision.compute_wq(t,sol,par,
+                                             compute_w=compute_w,
+                                             compute_q=compute_q)
                     toc__ = time.time()
-
-                    par.time_w[t] = toc__-tic__
-                    if do_print == True: print(f'Post-decision computed in {toc__-tic__:.1f} secs')
+                    par.time_post[t] = toc__-tic__
 
                 # II. Solve Bellman equation using solmethod
                 if par.solmethod == 'vfi': vfi.solve_bellman(t,sol,par)
-                if par.solmethod == 'nvfi': nvfi.solve_bellman(t,sol,par)
+                elif par.solmethod == 'egm': egm.solve_bellman(t,sol,par) 
+                elif par.solmethod == 'nvfi': nvfi.solve_bellman(t,sol,par)
+                else: raise ValueError(f'Unknown solution method {par.solmethod}')
             
             toc_ = time.time()
             par.time[t] = toc_-tic_
-            if do_print == True: print(f"Solved in {toc_-tic_:.1f} secs \n")
+            if do_print == True: print(f"t = {t} solved in {par.time[t]:.1f} secs (post-decision in {par.time_post[t]:.1f} secs)")
 
         toc = time.time()
         self.par.time_solve = toc - tic
-        if do_print == True: print(f'Model solved with {par.solmethod} in {toc-tic:.1f} secs')
-
-    ############
-    # Simulate #
-    ############
+        if do_print == True: print(f'Model solved with {par.solmethod} in {self.par.time_solve:.1f} secs')
 
     def simulate(self,do_print=True):
         """ Simulate model """
@@ -170,8 +177,13 @@ class BufferStockClass(ModelClass):
             simulate.lifecycle(sim,sol,par)
             toc = time.time()
 
-        self.par.time_sim = tic - toc
+        self.par.time_sim = toc - tic
         if do_print == True: print(f'Model simulated in {self.par.time_sim:.1f} secs')    
+
+    def checksum(self):
+        """ Print mean consumption in period 0 """
+
+        return np.mean(self.sol.c[0])
 
     ###########
     # Figures #
